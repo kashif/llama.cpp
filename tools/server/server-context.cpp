@@ -1121,7 +1121,10 @@ private:
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-        const bool has_spec = has_draft || spec_mtp;
+        const bool spec_uno = std::find(params_base.speculative.types.begin(),
+                                        params_base.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_UNO) != params_base.speculative.types.end();
+        const bool has_spec = has_draft || spec_mtp || spec_uno;
 
         if (callback_state) {
             std::vector<std::string> stages = {"text_model"};
@@ -1254,7 +1257,13 @@ private:
                     return false;
                 }
 
-                if (ctx_dft == nullptr) {
+                if (spec_uno && !spec_init->has_lora_gated()) {
+                    SRV_ERR("failed to load the gated LoRA adapter, '%s'\n", params_dft.speculative.draft.lora_path.c_str());
+                    return false;
+                }
+
+                // draft-uno drafts in the target context and has no draft context
+                if (ctx_dft == nullptr && (has_draft || spec_mtp)) {
                     SRV_ERR("%s", "failed to create MTP context\n");
                     return false;
                 }

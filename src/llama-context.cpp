@@ -88,6 +88,7 @@ llama_context::llama_context(
     model(model),
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
+    loras_gated(std::make_unique<llama_adapter_loras>()),
     // MTP uses the embd input for the hidden state
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd(),
                 llm_arch_supports_mixed_batch(model.arch) && params.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT)) {
@@ -1370,6 +1371,18 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
     sched_need_reserve = true;
 }
 
+void llama_context::set_adapter_lora_gated(llama_adapter_lora * adapter, float scale) {
+    LLAMA_LOG_DEBUG("%s: adapter = %p, scale = %f\n", __func__, (void *) adapter, scale);
+
+    loras_gated.reset(new llama_adapter_loras());
+
+    if (adapter != nullptr && scale != 0.0f) {
+        loras_gated->insert({adapter, scale});
+    }
+
+    sched_need_reserve = true;
+}
+
 bool llama_context::adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales) {
     LLAMA_LOG_DEBUG("%s: adapters = %p\n", __func__, (void *) adapters);
 
@@ -2568,6 +2581,12 @@ ggml_cgraph * llama_context::graph_reserve(
 
     ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
 
+    // reserve for the worst case, where all entries use the gated adapter
+    if (!loras_gated->empty()) {
+        ubatch.data->lora_gate.assign(ubatch.n_tokens, 1);
+        ubatch.lora_gate = ubatch.data->lora_gate.data();
+    }
+
     auto * res = gf_res_reserve.get();
 
     const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
@@ -2610,6 +2629,7 @@ llm_graph_params llama_context::graph_params(
         /*.backend_cpu =*/ backend_cpu,
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
+        /*.loras_gated =*/ loras_gated.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.moe_cache   =*/ moe_cache.get(),
@@ -4250,6 +4270,15 @@ int32_t llama_set_adapters_lora(
     }
 
     ctx->set_adapters_lora(adapters, n_adapters, scales);
+
+    return 0;
+}
+
+int32_t llama_set_adapter_lora_gated(
+            llama_context * ctx,
+            llama_adapter_lora * adapter,
+            float scale) {
+    ctx->set_adapter_lora_gated(adapter, scale);
 
     return 0;
 }

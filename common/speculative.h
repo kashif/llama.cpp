@@ -115,6 +115,9 @@ struct common_speculative_init_result {
     llama_model   * model();
     llama_context * context();
 
+    // true if the gated adapter of draft-uno was attached to the target context
+    bool has_lora_gated() const;
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

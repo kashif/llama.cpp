@@ -178,6 +178,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
+    COMMON_SPECULATIVE_TYPE_DRAFT_UNO,     // Uno self-speculative decoding (gated LoRA on the target model)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -337,6 +338,8 @@ struct common_params_speculative_draft {
     bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
 
     common_params_model mparams;
+
+    std::string lora_path; // gated LoRA adapter of the target model, used by draft-uno
 
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
@@ -1072,6 +1075,7 @@ struct common_batch {
         llama_embd   embd; // non-owning view of the data passed to add_embd()/set_embd(), data == NULL if none
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        bool         lora_gate = false;  // see llama_batch_ext_set_lora_gate()
     };
 
     std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i
@@ -1103,6 +1107,9 @@ struct common_batch {
     bool add_seq(int32_t idx, llama_seq_id seq_id);
 
     bool set_output(int32_t idx, bool value);
+
+    // use the gated adapter of the context for the entry at idx
+    bool set_lora_gate(int32_t idx, bool value);
 
     // attach a token embedding to the entry at idx, can only be set once per entry
     bool set_embd(int32_t idx, llama_embd embd);

@@ -59,6 +59,13 @@ int main(int argc, char ** argv) {
 
         spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
 
+        const bool spec_uno = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+                COMMON_SPECULATIVE_TYPE_DRAFT_UNO) != params.speculative.types.end();
+        if (spec_uno && !spec_init->has_lora_gated()) {
+            LOG_ERR("%s: failed to load the gated LoRA adapter\n", __func__);
+            return 1;
+        }
+
         params.speculative.draft.ctx_tgt = ctx_tgt;
         params.speculative.draft.ctx_dft = spec_init->context();
     }

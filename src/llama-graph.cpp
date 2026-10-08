@@ -257,6 +257,41 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_lora_gate::set_input(const llama_ubatch * ubatch) {
+    GGML_ASSERT(ubatch->lora_gate);
+
+    const uint32_t n_tokens = ubatch->n_tokens;
+
+    // a tensor that no matmul reads is not allocated
+    if (gate->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(gate->buffer));
+
+        float * data = (float *) gate->data;
+        for (uint32_t i = 0; i < n_tokens; ++i) {
+            data[i] = ubatch->lora_gate[i] ? 1.0f : 0.0f;
+        }
+    }
+
+    if (gate_out->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(gate_out->buffer));
+
+        // same row order as llm_graph_input_out_ids
+        float * data = (float *) gate_out->data;
+        uint32_t n_out = 0;
+        for (uint32_t i = 0; i < n_tokens; ++i) {
+            if (n_outputs == n_tokens || ubatch->output[i]) {
+                GGML_ASSERT(n_out < n_outputs);
+                data[n_out++] = ubatch->lora_gate[i] ? 1.0f : 0.0f;
+            }
+        }
+        GGML_ASSERT(n_out == n_outputs);
+    }
+}
+
+bool llm_graph_input_lora_gate::can_reuse(const llm_graph_params & params) {
+    return params.ubatch.lora_gate != nullptr && gate->ne[1] == params.ubatch.n_tokens && n_outputs == params.n_outputs;
+}
+
 bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
@@ -1522,6 +1557,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
     loras            (params.loras),
+    loras_gated      (params.loras_gated),
     mctx             (params.mctx),
     cross            (params.cross),
     moe_cache        (params.moe_cache),
@@ -1532,6 +1568,21 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
+
+        if (!loras_gated->empty() && ubatch.lora_gate) {
+            auto inp = std::make_unique<llm_graph_input_lora_gate>(n_outputs);
+
+            inp->gate = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+            ggml_set_input(inp->gate);
+
+            inp->gate_out = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_outputs);
+            ggml_set_input(inp->gate_out);
+
+            inp_lora_gate     = inp->gate;
+            inp_lora_gate_out = inp->gate_out;
+
+            res->add_input(std::move(inp));
+        }
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
@@ -1582,6 +1633,27 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 
         ab_cur = ggml_scale(ctx0, ab_cur, scale);
         res = ggml_add(ctx0, res, ab_cur);
+    }
+
+    if (inp_lora_gate) {
+        for (const auto & lora : *loras_gated) {
+            llama_adapter_lora_weight * lw = lora.first->get_weight(w);
+            if (lw == nullptr) {
+                continue;
+            }
+
+            const float scale = lw->get_scale(lora.first->alpha, lora.second);
+
+            ggml_tensor * ab_cur = ggml_mul_mat(ctx0, lw->b, ggml_mul_mat(ctx0, lw->a, cur));
+
+            // zero the delta of the rows that are not gated, the last layer may only keep the output rows
+            GGML_ASSERT(ab_cur->ne[2] == 1 && "gated lora expects 2D activations");
+            GGML_ASSERT((ab_cur->ne[1] == n_tokens || ab_cur->ne[1] == n_outputs) && "gated lora: unexpected number of rows");
+            ab_cur = ggml_mul(ctx0, ab_cur, ab_cur->ne[1] == n_tokens ? inp_lora_gate : inp_lora_gate_out);
+
+            ab_cur = ggml_scale(ctx0, ab_cur, scale);
+            res = ggml_add(ctx0, res, ab_cur);
+        }
     }
 
     return res;

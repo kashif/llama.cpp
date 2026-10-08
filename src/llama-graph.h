@@ -223,6 +223,21 @@ public:
     const llama_kv_cache_context * mctx;
 };
 
+class llm_graph_input_lora_gate : public llm_graph_input_i {
+public:
+    llm_graph_input_lora_gate(uint32_t n_outputs) : n_outputs(n_outputs) {}
+    virtual ~llm_graph_input_lora_gate() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * gate     = nullptr; // F32 [1, n_tokens]
+    ggml_tensor * gate_out = nullptr; // F32 [1, n_outputs], the rows kept by out_ids
+
+    const uint32_t n_outputs;
+};
+
 class llm_graph_input_out_ids : public llm_graph_input_i {
 public:
     llm_graph_input_out_ids(
@@ -793,6 +808,7 @@ struct llm_graph_params {
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
+    const llama_adapter_loras    * loras_gated;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
@@ -893,6 +909,8 @@ struct llm_graph_params {
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
+            loras_gated == other.loras_gated &&
+            (ubatch.lora_gate == nullptr) == (other.ubatch.lora_gate == nullptr) &&
             cross == other.cross;
     }
 };
@@ -1037,6 +1055,7 @@ struct llm_graph_context {
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
+    const llama_adapter_loras    * loras_gated;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
@@ -1051,6 +1070,10 @@ struct llm_graph_context {
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
+
+    // per-token gate of loras_gated, NULL if the ubatch has no gated entries
+    ggml_tensor * inp_lora_gate     = nullptr;
+    ggml_tensor * inp_lora_gate_out = nullptr;
 
     llm_graph_context(const llm_graph_params & params);
     virtual ~llm_graph_context() = default;

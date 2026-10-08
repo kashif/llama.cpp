@@ -114,6 +114,14 @@ enum llama_decision_order {
 // The embeddings output has one value per entry: row i is the score of option i
 LLAMA_API bool llama_batch_ext_set_decision_order(struct llama_batch_ext * batch, int32_t idx, enum llama_decision_order order);
 
+// Gated LoRA: the gated adapter of the context applies only to the entries marked here, the default is false
+// Used by self-speculative drafting (e.g. Uno) where draft rows use the adapter and the other rows use the base weights
+LLAMA_API bool llama_batch_ext_set_lora_gate(struct llama_batch_ext * batch, int32_t idx, bool gate);
+
+// Set the gated adapter of the context, NULL to remove it
+// It is kept apart from the adapters of llama_set_adapters_lora()
+LLAMA_API int32_t llama_set_adapter_lora_gated(struct llama_context * ctx, struct llama_adapter_lora * adapter, float scale);
+
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);

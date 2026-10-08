@@ -18,6 +18,7 @@
 #include <cstring>
 #include <iomanip>
 #include <map>
+#include <random>
 #include <cinttypes>
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -76,6 +77,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
     {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
+    {"draft-uno",     COMMON_SPECULATIVE_TYPE_DRAFT_UNO},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -1827,6 +1829,170 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 };
 
+// Uno: self-speculative drafting with a gated LoRA on the target model
+// ref: https://s-sahoo.com/uno/
+//
+// the target context decodes [id_last, noise_1, ..., noise_(n-1)] in one pass, only the noise rows use the gated adapter
+// row 0 gives the next token under the base weights, row k gives the draft at pos0 + k + 1
+// the draft rows are then removed from the KV cache, so the target verifies [id_last, draft...] as usual
+struct common_speculative_impl_draft_uno : public common_speculative_impl {
+    common_params_speculative_draft params;
+
+    common_batch batch;
+
+    std::vector<common_sampler_ptr> smpls;
+
+    std::vector<common_params_sampling> smpls_cfg;
+
+    std::mt19937 rng;
+
+    // noise ids are drawn from [1, noise_max)
+    llama_token noise_max;
+
+    common_speculative_impl_draft_uno(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_UNO, n_seq, params.draft.n_max)
+        , params(params.draft)
+        , rng(LLAMA_DEFAULT_SEED)
+    {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        if (!ctx_tgt) {
+            throw std::runtime_error("draft-uno requires a target context");
+        }
+
+        batch = common_batch(ctx_tgt);
+
+        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_tgt));
+
+        // the training mask token bounds the noise, models without one use the whole vocab
+        const llama_token mask = llama_vocab_mask(vocab);
+        noise_max = mask > 1 ? mask : llama_vocab_n_tokens(vocab);
+
+        smpls.resize(n_seq);
+        for (auto & smpl : smpls) {
+            common_params_sampling sparams;
+            sparams.no_perf  = false;
+            sparams.top_k    = 10;
+            sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+
+            smpl.reset(common_sampler_init(llama_get_model(ctx_tgt), sparams));
+        }
+
+        SPC_INF("adding speculative implementation 'draft-uno', n_max = %d, noise_max = %d\n", this->params.n_max, noise_max);
+    }
+
+    void begin(llama_seq_id seq_id, const llama_tokens & /*prompt*/) override {
+        common_sampler_reset(smpls[seq_id].get());
+    }
+
+    bool process(const common_batch & /*batch*/) override {
+        // the drafter is the target context itself, nothing to mirror
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto * ctx_tgt = params.ctx_tgt;
+
+        batch.clear();
+
+        std::vector<int32_t> i_first(n_seq, -1);
+        std::vector<int32_t> n_rows (n_seq, 0);
+
+        std::uniform_int_distribution<llama_token> dist_noise(1, noise_max - 1);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+
+            if (!dp.drafting) {
+                continue;
+            }
+
+            int32_t n = params.n_max;
+            if (dp.n_max > 0) {
+                n = std::min(n, dp.n_max);
+            }
+            if (n <= 0) {
+                continue;
+            }
+
+            if (!params.probabilistic) {
+                dp.result_q = nullptr;
+            }
+
+            if (dp.result_q) {
+                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_tgt), seq_id, dp.temp, dp.seed);
+            } else {
+                common_sampler_reset(smpls[seq_id].get());
+            }
+
+            i_first[seq_id] = batch.add(dp.id_last, dp.pos0, seq_id, true);
+            for (int32_t k = 1; k < n; ++k) {
+                const int32_t idx = batch.add(dist_noise(rng), dp.pos0 + k, seq_id, true);
+                batch.set_lora_gate(idx, true);
+            }
+
+            n_rows[seq_id] = n;
+        }
+
+        if (batch.size() == 0) {
+            return;
+        }
+
+        const int ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (n_rows[seq_id] == 0) {
+                continue;
+            }
+
+            auto & dp = dparams[seq_id];
+
+            if (ret == 0) {
+                auto * smpl = smpls[seq_id].get();
+                auto & result = *dp.result;
+
+                for (int32_t k = 0; k < n_rows[seq_id]; ++k) {
+                    const llama_token id_sampled = common_sampler_sample(smpl, ctx_tgt, i_first[seq_id] + k, true);
+
+                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+                    SPC_DBG(" - seq_id %d, draft %3d: %6d (%8.3f) '%s'\n", seq_id, k,
+                            cur_p->data[0].id, cur_p->data[0].p, common_token_to_piece(ctx_tgt, cur_p->data[0].id).c_str());
+
+                    // the drafts are independent of each other, so stop at the first one with low confidence
+                    if (cur_p->data[0].p < params.p_min) {
+                        break;
+                    }
+
+                    const llama_token id = dp.result_q ? id_sampled : cur_p->data[0].id;
+
+                    common_sampler_accept(smpl, id, true);
+
+                    result.push_back(id);
+
+                    if (dp.result_q) {
+                        dp.result_q->emplace_back(cur_p->data, cur_p->data + cur_p->size);
+                    }
+                }
+
+                if (result.size() < (size_t) params.n_min) {
+                    result.clear();
+                    if (dp.result_q) {
+                        dp.result_q->clear();
+                    }
+                }
+            } else {
+                SPC_ERR("llama_process returned %d\n", ret);
+            }
+
+            // drop the draft rows, the target verifies from pos0 again
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, dp.pos0, -1);
+        }
+    }
+
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_impl_ngram_simple : public common_speculative_impl {
     common_params_speculative_ngram_map params;
@@ -2312,6 +2478,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_UNO:     return "draft-uno";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -2403,6 +2570,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_UNO:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -2591,6 +2759,8 @@ struct common_speculative_init_result::impl {
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
     llama_model_ptr   model;
     llama_context_ptr context;
+
+    bool has_lora_gated = false;
 };
 
 common_speculative_init_result::common_speculative_init_result(
@@ -2651,9 +2821,37 @@ common_speculative_init_result::common_speculative_init_result(
 
         pimpl->context.reset(ctx_dft);
     }
+
+    const bool spec_uno = std::find(params.speculative.types.begin(),
+                                    params.speculative.types.end(),
+                                    COMMON_SPECULATIVE_TYPE_DRAFT_UNO) != params.speculative.types.end();
+    if (spec_uno) {
+        const std::string & lora_path = params.speculative.draft.lora_path;
+        if (lora_path.empty()) {
+            LOG_ERR("%s: draft-uno requires a gated LoRA adapter (--spec-draft-lora)\n", __func__);
+            return;
+        }
+
+        LOG_INF("%s: loading gated LoRA adapter '%s'\n", __func__, lora_path.c_str());
+
+        // the model owns the adapter and frees it with the model
+        llama_adapter_lora * adapter = llama_adapter_lora_init(model_tgt, lora_path.c_str());
+        if (adapter == nullptr) {
+            LOG_ERR("%s: failed to load gated LoRA adapter '%s'\n", __func__, lora_path.c_str());
+            return;
+        }
+
+        llama_set_adapter_lora_gated(ctx_tgt, adapter, 1.0f);
+
+        pimpl->has_lora_gated = true;
+    }
 }
 
 common_speculative_init_result::~common_speculative_init_result() = default;
+
+bool common_speculative_init_result::has_lora_gated() const {
+    return pimpl->has_lora_gated;
+}
 
 llama_model * common_speculative_init_result::model() {
     return pimpl->model.get();
@@ -2693,7 +2891,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         };
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -2708,6 +2906,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_UNO,    params.draft.ctx_tgt != nullptr);
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -2735,6 +2934,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(
                         config.params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_UNO: {
+                impls.push_back(std::make_unique<common_speculative_impl_draft_uno>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
