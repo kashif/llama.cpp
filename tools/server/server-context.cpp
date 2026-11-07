@@ -11,6 +11,7 @@
 #include "server-realtime.h"
 #include "server-schema.h"
 #include "server-stream.h"
+#include "../../src/llama-ext.h" // staging API: llama_adapter_lora_is_gated
 
 #include "build-info.h"
 #include "common.h"
@@ -1358,7 +1359,7 @@ private:
                 }
 
                 if (spec_uno && !spec_init->has_lora_gated()) {
-                    SRV_ERR("failed to load the gated LoRA adapter, '%s'\n", params_dft.speculative.draft.lora_path.c_str());
+                    SRV_ERR("%s", "draft-uno requires a gated LoRA adapter (--lora)\n");
                     return false;
                 }
 
@@ -1953,7 +1954,8 @@ private:
             auto it = config.find(i);
             if (it != config.end()) {
                 output[i].scale = it->second;
-            } else {
+            } else if (!llama_adapter_lora_is_gated(output[i].ptr)) {
+                // a gated adapter does not change the output of a request, keep it enabled
                 output[i].scale = 0.0f;
             }
         }
@@ -3410,6 +3412,7 @@ private:
                             lora,
                             alora_invocation_string,
                             alora_invocation_tokens,
+                            llama_adapter_lora_is_gated(lora.ptr),
                         });
                     }
                     queue_results.send(std::move(res));

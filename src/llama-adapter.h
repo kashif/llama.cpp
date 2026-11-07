@@ -77,6 +77,9 @@ struct llama_adapter_lora {
     // activated lora (aLoRA)
     std::vector<llama_token> alora_invocation_tokens;
 
+    // gated lora, see llama_batch_ext_set_lora_gate()
+    bool gated = false;
+
     explicit llama_adapter_lora(llama_model * model) : model(model) {}
     ~llama_adapter_lora() = default;
 

@@ -817,7 +817,6 @@ struct llm_graph_params {
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
-    const llama_adapter_loras    * loras_gated;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
@@ -927,7 +926,6 @@ struct llm_graph_params {
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
-            loras_gated == other.loras_gated &&
             (ubatch.lora_gate == nullptr) == (other.ubatch.lora_gate == nullptr) &&
             cross == other.cross;
     }
@@ -1084,7 +1082,6 @@ struct llm_graph_context {
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
-    const llama_adapter_loras    * loras_gated;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
@@ -1105,7 +1102,7 @@ struct llm_graph_context {
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
 
-    // per-token gate of loras_gated, NULL if the ubatch has no gated entries
+    // per-token gate of the gated adapters, NULL if the ubatch has no gate
     ggml_tensor * inp_lora_gate     = nullptr;
     ggml_tensor * inp_lora_gate_out = nullptr;
 

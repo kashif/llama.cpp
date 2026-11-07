@@ -431,6 +431,7 @@ class Keys:
         LORA_ALPHA              = "adapter.lora.alpha"
         LORA_TASK_NAME          = "adapter.lora.task_name"
         LORA_PROMPT_PREFIX      = "adapter.lora.prompt_prefix"
+        LORA_GATED              = "adapter.lora.gated"
         ALORA_INVOCATION_TOKENS = "adapter.alora.invocation_tokens"
 
     class IMatrix:

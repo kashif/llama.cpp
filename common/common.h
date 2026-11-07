@@ -341,8 +341,6 @@ struct common_params_speculative_draft {
 
     common_params_model mparams;
 
-    std::string lora_path; // gated LoRA adapter of the target model, used by draft-uno
-
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
 
@@ -1129,7 +1127,6 @@ struct common_batch {
 
     bool set_output(int32_t idx, bool value);
 
-    // use the gated adapter of the context for the entry at idx
     bool set_lora_gate(int32_t idx, bool value);
 
     // attach a token embedding to the entry at idx, can only be set once per entry

@@ -491,6 +491,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ADAPTER_LORA_ALPHA,              "adapter.lora.alpha"         },
     { LLM_KV_ADAPTER_LORA_TASK_NAME,          "adapter.lora.task_name"     },
     { LLM_KV_ADAPTER_LORA_PROMPT_PREFIX,      "adapter.lora.prompt_prefix" },
+    { LLM_KV_ADAPTER_LORA_GATED,              "adapter.lora.gated"         },
     { LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS, "adapter.alora.invocation_tokens" },
 
     { LLM_KV_XIELU_ALPHA_N,         "xielu.alpha_n"         },

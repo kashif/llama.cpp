@@ -673,6 +673,7 @@ struct server_task_result_get_lora : server_task_result {
         common_adapter_lora_info info;
         std::string  alora_invocation_string;
         llama_tokens alora_invocation_tokens;
+        bool         gated;
     };
     std::vector<lora> loras;
 

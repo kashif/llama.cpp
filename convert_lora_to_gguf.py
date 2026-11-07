@@ -291,6 +291,10 @@ def parse_args() -> argparse.Namespace:
         help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
     )
     parser.add_argument(
+        "--gated", action="store_true",
+        help="mark the adapter as a gated LoRA, it applies only to the batch entries that enable the gate",
+    )
+    parser.add_argument(
         "--bigendian", action="store_true",
         help="model is executed on big endian machine",
     )
@@ -429,6 +433,9 @@ if __name__ == '__main__':
             def set_gguf_parameters(self):
                 logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                if args.gated or lparams.get("gated"):
+                    logger.debug("GGUF KV: %s = true", gguf.Keys.Adapter.LORA_GATED)
+                    self.gguf_writer.add_bool(gguf.Keys.Adapter.LORA_GATED, True)
                 alora_invocation_tokens = lparams.get("alora_invocation_tokens")
                 invocation_string = lparams.get("invocation_string")
                 if invocation_string and not alora_invocation_tokens:

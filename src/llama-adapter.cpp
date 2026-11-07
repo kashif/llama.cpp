@@ -239,6 +239,15 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
                 (const llama_token *)data + seq_len,
                 adapter.alora_invocation_tokens.begin());
         }
+
+        const auto & key_gated = llm_kv(LLM_KV_ADAPTER_LORA_GATED);
+        const int kid_gated = gguf_find_key(ctx_gguf.get(), key_gated.c_str());
+        if (kid_gated >= 0) {
+            if (gguf_get_kv_type(ctx_gguf.get(), kid_gated) != GGUF_TYPE_BOOL) {
+                throw std::runtime_error("invalid gguf type for " + key_gated);
+            }
+            adapter.gated = gguf_get_val_bool(ctx_gguf.get(), kid_gated);
+        }
     }
 
     int n_tensors = gguf_get_n_tensors(ctx_gguf.get());
@@ -524,4 +533,8 @@ uint64_t llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_
 const llama_token * llama_adapter_get_alora_invocation_tokens(const llama_adapter_lora * adapter) {
     GGML_ASSERT(adapter);
     return adapter->alora_invocation_tokens.data();
+}
+
+bool llama_adapter_lora_is_gated(const llama_adapter_lora * adapter) {
+    return adapter && adapter->gated;
 }

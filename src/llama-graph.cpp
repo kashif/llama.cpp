@@ -17,6 +17,7 @@
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -1614,7 +1615,6 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
     loras            (params.loras),
-    loras_gated      (params.loras_gated),
     mctx             (params.mctx),
     cross            (params.cross),
     moe_cache        (params.moe_cache),
@@ -1629,7 +1629,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     gf               (res->get_gf()) {
         res->set_params(params);
 
-        if (!loras_gated->empty() && ubatch.lora_gate) {
+        const bool has_gated = std::any_of(loras->begin(), loras->end(), [](const auto & lora) { return lora.first->gated; });
+        if (has_gated && ubatch.lora_gate) {
             auto inp = std::make_unique<llm_graph_input_lora_gate>(n_outputs);
 
             inp->gate = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
@@ -1747,6 +1748,11 @@ ggml_tensor * llm_graph_context::build_lora_mm(
             continue;
         }
 
+        // a ubatch without a gate has no gated entries
+        if (lora.first->gated && !inp_lora_gate) {
+            continue;
+        }
+
         const float adapter_scale = lora.second;
         const float scale = lw->get_scale(lora.first->alpha, adapter_scale);
 
@@ -1755,29 +1761,15 @@ ggml_tensor * llm_graph_context::build_lora_mm(
                 ggml_mul_mat(ctx0, lw->a, cur)
                 );
 
-        ab_cur = ggml_scale(ctx0, ab_cur, scale);
-        res = ggml_add(ctx0, res, ab_cur);
-    }
-
-    if (inp_lora_gate) {
-        for (const auto & lora : *loras_gated) {
-            llama_adapter_lora_weight * lw = lora.first->get_weight(w);
-            if (lw == nullptr) {
-                continue;
-            }
-
-            const float scale = lw->get_scale(lora.first->alpha, lora.second);
-
-            ggml_tensor * ab_cur = ggml_mul_mat(ctx0, lw->b, ggml_mul_mat(ctx0, lw->a, cur));
-
+        if (lora.first->gated) {
             // zero the delta of the rows that are not gated, the last layer may only keep the output rows
             GGML_ASSERT(ab_cur->ne[2] == 1 && "gated lora expects 2D activations");
             GGML_ASSERT((ab_cur->ne[1] == n_tokens || ab_cur->ne[1] == n_outputs) && "gated lora: unexpected number of rows");
             ab_cur = ggml_mul(ctx0, ab_cur, ab_cur->ne[1] == n_tokens ? inp_lora_gate : inp_lora_gate_out);
-
-            ab_cur = ggml_scale(ctx0, ab_cur, scale);
-            res = ggml_add(ctx0, res, ab_cur);
         }
+
+        ab_cur = ggml_scale(ctx0, ab_cur, scale);
+        res = ggml_add(ctx0, res, ab_cur);
     }
 
     return res;
@@ -1851,7 +1843,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     }
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
-        if (lw == nullptr) {
+        // the gate is only supported by build_lora_mm
+        if (lw == nullptr || lora.first->gated) {
             continue;
         }
 
@@ -2825,7 +2818,8 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
         // apply lora for embedding tokens if needed
         for (const auto & lora : *loras) {
             llama_adapter_lora_weight * lw = lora.first->get_weight(tok_embd);
-            if (lw == nullptr) {
+            // the gate is only supported by build_lora_mm
+            if (lw == nullptr || lora.first->gated) {
                 continue;
             }
 

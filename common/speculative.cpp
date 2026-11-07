@@ -2005,12 +2005,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 };
 
-// Uno: self-speculative drafting with a gated LoRA on the target model
-// ref: https://s-sahoo.com/uno/
-//
-// the target context decodes [id_last, noise_1, ..., noise_(n-1)] in one pass, only the noise rows use the gated adapter
-// row 0 gives the next token under the base weights, row k gives the draft at pos0 + k + 1
-// the draft rows are then removed from the KV cache, so the target verifies [id_last, draft...] as usual
+// Uno: self-speculative drafting with a gated LoRA on the target model, ref: https://s-sahoo.com/uno/
+// decodes [id_last, noise...] in the target context with the adapter only on the noise rows, then removes them from the KV cache
 struct common_speculative_impl_draft_uno : public common_speculative_impl {
     common_params_speculative_draft params;
 
@@ -2061,7 +2057,6 @@ struct common_speculative_impl_draft_uno : public common_speculative_impl {
     }
 
     bool process(const common_batch & /*batch*/) override {
-        // the drafter is the target context itself, nothing to mirror
         return true;
     }
 
@@ -2134,7 +2129,7 @@ struct common_speculative_impl_draft_uno : public common_speculative_impl {
                     SPC_DBG(" - seq_id %d, draft %3d: %6d (%8.3f) '%s'\n", seq_id, k,
                             cur_p->data[0].id, cur_p->data[0].p, common_token_to_piece(ctx_tgt, cur_p->data[0].id).c_str());
 
-                    // the drafts are independent of each other, so stop at the first one with low confidence
+                    // only collect very high-confidence draft tokens
                     if (cur_p->data[0].p < params.p_min) {
                         break;
                     }
@@ -2160,7 +2155,6 @@ struct common_speculative_impl_draft_uno : public common_speculative_impl {
                 SPC_ERR("llama_process returned %d\n", ret);
             }
 
-            // drop the draft rows, the target verifies from pos0 again
             llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, dp.pos0, -1);
         }
     }
@@ -3003,28 +2997,10 @@ common_speculative_init_result::common_speculative_init_result(
         pimpl->context.reset(ctx_dft);
     }
 
-    const bool spec_uno = std::find(params.speculative.types.begin(),
-                                    params.speculative.types.end(),
-                                    COMMON_SPECULATIVE_TYPE_DRAFT_UNO) != params.speculative.types.end();
-    if (spec_uno) {
-        const std::string & lora_path = params.speculative.draft.lora_path;
-        if (lora_path.empty()) {
-            LOG_ERR("%s: draft-uno requires a gated LoRA adapter (--spec-draft-lora)\n", __func__);
-            return;
+    for (const auto & la : params.lora_adapters) {
+        if (llama_adapter_lora_is_gated(la.ptr) && la.scale != 0.0f) {
+            pimpl->has_lora_gated = true;
         }
-
-        LOG_INF("%s: loading gated LoRA adapter '%s'\n", __func__, lora_path.c_str());
-
-        // the model owns the adapter and frees it with the model
-        llama_adapter_lora * adapter = llama_adapter_lora_init(model_tgt, lora_path.c_str());
-        if (adapter == nullptr) {
-            LOG_ERR("%s: failed to load gated LoRA adapter '%s'\n", __func__, lora_path.c_str());
-            return;
-        }
-
-        llama_set_adapter_lora_gated(ctx_tgt, adapter, 1.0f);
-
-        pimpl->has_lora_gated = true;
     }
 }
 

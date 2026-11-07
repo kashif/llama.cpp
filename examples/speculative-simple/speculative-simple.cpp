@@ -62,7 +62,7 @@ int main(int argc, char ** argv) {
         const bool spec_uno = std::find(params.speculative.types.begin(), params.speculative.types.end(),
                 COMMON_SPECULATIVE_TYPE_DRAFT_UNO) != params.speculative.types.end();
         if (spec_uno && !spec_init->has_lora_gated()) {
-            LOG_ERR("%s: failed to load the gated LoRA adapter\n", __func__);
+            LOG_ERR("%s: draft-uno requires a gated LoRA adapter (--lora)\n", __func__);
             return 1;
         }
 

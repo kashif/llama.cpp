@@ -8,7 +8,9 @@
 #include "base64.hpp"
 
 #include "server-common.h"
+#include "../../src/llama-ext.h" // staging API: llama_adapter_lora_is_gated
 
+#include <algorithm>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -274,7 +276,7 @@ json server_model_architecture_json(
 bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras) {
     bool found_alora = false;
     for (const auto & lora : loras) {
-        if (lora.scale != 0) {
+        if (lora.scale != 0 && !llama_adapter_lora_is_gated(lora.ptr)) {
             if (llama_adapter_get_alora_n_invocation_tokens(lora.ptr) == 0) {
                 return false;
             }
@@ -292,6 +294,17 @@ bool lora_should_clear_cache(
     // _not_ equal. This assert is therefore some slightly wasted work and
     // should be safe to remove as long as this method is called correctly.
     GGML_ASSERT(!are_lora_equal(current, next));
+
+    // a gated adapter does not change the cached tokens
+    const auto without_gated = [](std::vector<common_adapter_lora_info> loras) {
+        loras.erase(std::remove_if(loras.begin(), loras.end(), [](const auto & lora) {
+            return llama_adapter_lora_is_gated(lora.ptr);
+        }), loras.end());
+        return loras;
+    };
+    if (are_lora_equal(without_gated(current), without_gated(next))) {
+        return false;
+    }
 
     return (
         !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
@@ -329,7 +342,7 @@ bool are_lora_equal(
 std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras) {
     std::vector<size_t> enabled_ids;
     for (size_t i = 0; i < loras.size(); ++i) {
-        if (loras[i].scale > 0) {
+        if (loras[i].scale > 0 && !llama_adapter_lora_is_gated(loras[i].ptr)) {
             enabled_ids.push_back(i);
         }
     }

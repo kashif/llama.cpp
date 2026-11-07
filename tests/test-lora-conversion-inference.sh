@@ -71,6 +71,13 @@ run_conversion_and_inference_lora() {
         --outtype f32
 
     echo -e "\n\n---------------------------\n\n"
+    echo "Running convert_lora_to_gguf.py --gated for $model_name with hidden_size $hidden_size..."
+    python3 convert_lora_to_gguf.py $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora \
+        --base $MODELS_REPO/$model_name/hidden_size=$hidden_size/base \
+        --outfile $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA-gated.gguf \
+        --outtype f32 --gated
+
+    echo -e "\n\n---------------------------\n\n"
     echo "Running llama-export-lora with lora for $model_name with hidden_size $hidden_size..."
     ./llama-export-lora \
         -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
@@ -94,10 +101,30 @@ run_conversion_and_inference_lora() {
     OUTPUT_LORA_MERGED=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
+    echo -e "\n\n---------------------------\n\n"
+    echo "Running llama-completion with gated lora for $model_name with hidden_size $hidden_size..."
+    OUTPUT_LORA_GATED=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+        --lora $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA-gated.gguf \
+        -p "$EXPECTED_BASE_FIRST_WORD" -n 50 --seed 42 --temp 0)
+
+    echo -e "\n\n---------------------------\n\n"
+    echo "Running llama-speculative-simple with draft-uno for $model_name with hidden_size $hidden_size..."
+    local n_draft=4
+    local log_uno=$MODELS_REPO/$model_name/hidden_size=$hidden_size/draft-uno.log
+    OUTPUT_DRAFT_UNO=$(./llama-speculative-simple -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+        --lora $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA-gated.gguf \
+        --spec-type draft-uno --spec-draft-n-max $n_draft \
+        -p "$EXPECTED_BASE_FIRST_WORD" -n 50 --seed 42 --temp 0 2> $log_uno)
+    local n_drafted=$(sed -n 's/.*n_drafted = \([0-9]*\).*/\1/p' $log_uno)
+    local n_accept=$(sed -n 's/.*n_accept  = \([0-9]*\).*/\1/p' $log_uno)
+
     # Remove any initial white space
     OUTPUT_BASE=$(trim_leading_whitespace "$OUTPUT_BASE")
     OUTPUT_LORA_HOT=$(trim_leading_whitespace "$OUTPUT_LORA_HOT")
     OUTPUT_LORA_MERGED=$(trim_leading_whitespace "$OUTPUT_LORA_MERGED")
+    OUTPUT_LORA_GATED=$(trim_leading_whitespace "$OUTPUT_LORA_GATED")
+    # llama-speculative-simple prints the prompt with its special tokens
+    OUTPUT_DRAFT_UNO="$EXPECTED_BASE_FIRST_WORD${OUTPUT_DRAFT_UNO#*"$EXPECTED_BASE_FIRST_WORD"}"
     # Extract the corresponding substring from full string
     EXPECTED_BASE=$(extract_starting_substring "$EXPECTED_BASE_FULL" "$OUTPUT_BASE")
     EXPECTED_LORA=$(extract_starting_substring "$EXPECTED_LORA_FULL" "$OUTPUT_LORA_HOT")
@@ -118,6 +145,23 @@ run_conversion_and_inference_lora() {
         echo -e "Out=$OUTPUT_LORA_MERGED\n\nExp=$EXPECTED_LORA"
         exit 1
     fi
+    # A gated lora must not change regular decoding
+    if [[ "$OUTPUT_LORA_GATED" != "$OUTPUT_BASE" ]]; then
+        echo "Error: $model_name OUTPUT_LORA_GATED does not match OUTPUT_BASE."
+        echo -e "Out=$OUTPUT_LORA_GATED\n\nExp=$OUTPUT_BASE"
+        exit 1
+    fi
+    # Drafting with a gated lora must not change the output
+    if [[ "$OUTPUT_DRAFT_UNO" != "$EXPECTED_BASE"* && "$EXPECTED_BASE" != "$OUTPUT_DRAFT_UNO"* ]]; then
+        echo "Error: $model_name OUTPUT_DRAFT_UNO does not match OUTPUT_BASE."
+        echo -e "Out=$OUTPUT_DRAFT_UNO\n\nExp=$EXPECTED_BASE"
+        exit 1
+    fi
+    # The gate is off on the first row of each draft, so its token must always match the base model
+    if [[ -z "$n_drafted" || "$n_drafted" -eq 0 || "$n_accept" -lt $((n_drafted / n_draft)) ]]; then
+        echo "Error: $model_name draft-uno accepted $n_accept of $n_drafted drafted tokens with n_draft = $n_draft."
+        exit 1
+    fi
 
     # Store the results
     results+=("
@@ -125,6 +169,8 @@ run_conversion_and_inference_lora() {
     \n\033[32m  • Base:\n$OUTPUT_BASE
     \n\033[34m  • Lora hot:\n$OUTPUT_LORA_HOT
     \n\033[36m  • Lora merged:\n$OUTPUT_LORA_MERGED
+    \n\033[35m  • Lora gated:\n$OUTPUT_LORA_GATED
+    \n\033[33m  • Draft uno:\n$OUTPUT_DRAFT_UNO
     \n \033[0m
     ")
 
