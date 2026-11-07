@@ -292,7 +292,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--gated", action="store_true",
-        help="mark the adapter as a gated LoRA, it applies only to the batch entries that enable the gate",
+        help="mark the adapter as a gated LoRA (https://huggingface.co/papers/2507.11851), it applies only to the batch entries that enable the gate",
     )
     parser.add_argument(
         "--bigendian", action="store_true",

@@ -147,8 +147,8 @@ enum llama_decision_order {
 // The embeddings output has one value per entry: row i is the score of option i
 LLAMA_API bool llama_batch_ext_set_decision_order(struct llama_batch_ext * batch, int32_t idx, enum llama_decision_order order);
 
-// Gated LoRA: an adapter with "adapter.lora.gated" applies only to the entries marked here, the default is false
-// Used by self-speculative drafting (e.g. Uno) where draft rows use the adapter and the other rows use the base weights
+// Gated LoRA (https://huggingface.co/papers/2507.11851): an adapter with "adapter.lora.gated" applies only to the entries marked here, the default is false
+// Used by self-speculative drafting (e.g. draft-uno) where draft rows use the adapter and the other rows use the base weights
 LLAMA_API bool llama_batch_ext_set_lora_gate(struct llama_batch_ext * batch, int32_t idx, bool gate);
 LLAMA_API bool llama_adapter_lora_is_gated(const struct llama_adapter_lora * adapter);
 

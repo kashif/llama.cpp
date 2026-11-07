@@ -1307,7 +1307,7 @@ Please note that this value will be overwritten by the `lora` field for each req
 
 If an adapter is disabled, the scale will be set to 0.
 
-An adapter with `"gated": true` applies only to the batch entries that enable the gate, it does not change regular decoding. It is used by `--spec-type draft-uno` to draft tokens.
+An adapter with `"gated": true` is a [gated LoRA](https://huggingface.co/papers/2507.11851): it applies only to the batch entries that enable the gate, and it does not change regular decoding. It is used by `--spec-type draft-uno` to draft tokens.
 
 **Response format**
 
