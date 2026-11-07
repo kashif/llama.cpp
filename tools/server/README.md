@@ -1307,7 +1307,7 @@ Please note that this value will be overwritten by the `lora` field for each req
 
 If an adapter is disabled, the scale will be set to 0.
 
-An adapter with `"gated": true` is a [gated LoRA](https://huggingface.co/papers/2507.11851): it applies only to the batch entries that enable the gate, and it does not change regular decoding. It is used by `--spec-type draft-uno` to draft tokens.
+An adapter with `"gated": true` is a [gated LoRA](https://huggingface.co/papers/2507.11851): it applies only to the batch entries that enable the gate, and it does not change regular decoding. `--spec-type draft-uno` drafts with it in a separate draft context, so setting its scale per request has no effect.
 
 **Response format**
 
@@ -1330,7 +1330,7 @@ An adapter with `"gated": true` is a [gated LoRA](https://huggingface.co/papers/
 
 This sets the global scale for LoRA adapters. Please note that this value will be overwritten by the `lora` field for each request.
 
-To disable an adapter, either remove it from the list below, or set scale to 0. A gated adapter stays enabled unless its scale is set to 0.
+To disable an adapter, either remove it from the list below, or set scale to 0.
 
 **Request format**
 

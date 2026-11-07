@@ -1843,8 +1843,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     }
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
-        // the gate is only supported by build_lora_mm
-        if (lw == nullptr || lora.first->gated) {
+        if (lw == nullptr) {
             continue;
         }
 
@@ -2818,8 +2817,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
         // apply lora for embedding tokens if needed
         for (const auto & lora : *loras) {
             llama_adapter_lora_weight * lw = lora.first->get_weight(tok_embd);
-            // the gate is only supported by build_lora_mm
-            if (lw == nullptr || lora.first->gated) {
+            if (lw == nullptr) {
                 continue;
             }
 

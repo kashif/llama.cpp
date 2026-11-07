@@ -114,7 +114,6 @@ struct common_speculative_init_result {
 
     llama_model   * model();
     llama_context * context();
-    bool has_lora_gated() const;
 
 private:
     struct impl;

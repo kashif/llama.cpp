@@ -1358,13 +1358,7 @@ private:
                     return false;
                 }
 
-                if (spec_uno && !spec_init->has_lora_gated()) {
-                    SRV_ERR("%s", "draft-uno requires a gated LoRA adapter (--lora)\n");
-                    return false;
-                }
-
-                // draft-uno drafts in the target context and has no draft context
-                if (ctx_dft == nullptr && (has_draft || spec_mtp)) {
+                if (ctx_dft == nullptr) {
                     SRV_ERR("%s", "failed to create MTP context\n");
                     return false;
                 }
@@ -1954,8 +1948,7 @@ private:
             auto it = config.find(i);
             if (it != config.end()) {
                 output[i].scale = it->second;
-            } else if (!llama_adapter_lora_is_gated(output[i].ptr)) {
-                // a gated adapter does not change the output of a request, keep it enabled
+            } else {
                 output[i].scale = 0.0f;
             }
         }

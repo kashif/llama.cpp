@@ -433,7 +433,7 @@ if __name__ == '__main__':
             def set_gguf_parameters(self):
                 logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
-                if args.gated or lparams.get("gated"):
+                if args.gated or lparams.get("use_gated_lora"):
                     logger.debug("GGUF KV: %s = true", gguf.Keys.Adapter.LORA_GATED)
                     self.gguf_writer.add_bool(gguf.Keys.Adapter.LORA_GATED, True)
                 alora_invocation_tokens = lparams.get("alora_invocation_tokens")

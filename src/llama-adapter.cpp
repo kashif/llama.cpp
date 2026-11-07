@@ -348,6 +348,10 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
         if (model.hdmd.inverse_blocks.count(name)) {
             throw std::runtime_error("LoRA tensor '" + name + "' targets a prism.hadamard latent lookup table, which is not supported");
         }
+        // the gate is applied by build_lora_mm, which does not handle the embeddings and the expert weights
+        if (adapter.gated && (is_token_embd || ggml_n_dims(model_tensor) > 2)) {
+            throw std::runtime_error("gated LoRA tensor '" + name + "' is not supported, only 2D matmul weights can be gated");
+        }
 
         auto * buft = ggml_backend_buffer_get_type(model_tensor->buffer);
 
